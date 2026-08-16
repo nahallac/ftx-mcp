@@ -26,7 +26,7 @@ using FTOptix.CoreBase;
 // "MCPBridge" Optix library (component "StudioMCPBridge") for drag-in reuse.
 public class StudioMCPBridge : BaseNetLogic
 {
-    private const string BridgeVersion = "1.0.5";
+    private const string BridgeVersion = "1.0.6";
     // Cross-ALC stop signal: at design time Studio runs each [ExportMethod] in an
     // ISOLATED AssemblyLoadContext, so StartBridge and StopBridge share NO managed
     // state (neither instance NOR static - both were tried and failed).
@@ -763,9 +763,10 @@ public class StudioMCPBridge : BaseNetLogic
     // Legend filter: an author-facing settable property. Keeps FTOptix-declared
     // value props, drops the noise the generated proxy also exposes - the IUAVariable
     // companion accessors (X has an XVariable pair) and structural children
-    // (Children/GridLayoutProperties). Used ONLY for the human/LLM legend
-    // (describe + the rejection hint), NOT for the gate's acceptance test - the gate
-    // stays permissive so it never false-rejects a genuinely-declared property.
+    // (Children/GridLayoutProperties). Used for the human/LLM legend (describe +
+    // the rejection hint); the gate's acceptance test shares the FTOptix-namespace
+    // requirement (see DeclaredPropertyGuard) but stays otherwise permissive so it
+    // never false-rejects a genuinely-declared property.
     private static bool IsLegendProp(System.Reflection.PropertyInfo pi)
     {
         return pi.DeclaringType != null && pi.DeclaringType.Namespace != null
@@ -1028,11 +1029,28 @@ public class StudioMCPBridge : BaseNetLogic
     // safe to materialize (already-materialized OR type-declared, inheritance-aware
     // via the generated Optix proxy), else an unknown_property error JSON carrying
     // the valid set. Every user-facing materialization site MUST call this first.
+    //
+    // The acceptance test requires the CLR match to be DECLARED IN AN FTOptix
+    // NAMESPACE. A bare any-public-property match false-accepted UAManagedCore
+    // node ATTRIBUTES (DisplayName, BrowseName, Description, NodeId, ...): they
+    // exist as CLR properties on every node proxy but are not UA child variables,
+    // so GetOrCreateVariable fabricated an orphan and Studio died on the next
+    // render (crash confirmed live 2026-08-16, agent set DisplayName). Node
+    // attributes are never legitimately settable through this path, so the
+    // namespace requirement cannot false-reject a real property.
     private string DeclaredPropertyGuard(IUANode node, string name)
     {
         if (node.GetVariable(name) != null) return null;   // already materialized
+        if (IsNodeAttributeName(name))
+            return "{\"error\":{\"code\":\"node_attribute_not_settable\",\"message\":\"" +
+                   JsonEscape(name + " is a node attribute, not a settable property - " +
+                       "writing it can crash Studio. To rename a node, use the move op " +
+                       "with new_name (same parent = in-place rename).") + "\"}}";
         if (node.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .Any(p => p.Name == name)) return null;    // type-declared -> safe
+                .Any(p => p.Name == name && p.DeclaringType != null
+                       && p.DeclaringType.Namespace != null
+                       && p.DeclaringType.Namespace.StartsWith("FTOptix")))
+            return null;                                   // FTOptix-declared -> safe
         // Mirror the wire_event reject-with-valid-list: hand back the authoritative
         // set + a best-effort suggestion, baked into the message so it survives the
         // Python-side message/code flattening (a sibling did_you_mean field alone is
@@ -1053,6 +1071,22 @@ public class StudioMCPBridge : BaseNetLogic
         }
         sb.Append(",\"valid_properties\":[" + PropertyNamesJsonList(node) + "]}}");
         return sb.ToString();
+    }
+
+    // UA node ATTRIBUTES the proxy exposes as CLR properties. Not UA child
+    // variables - materializing one crashes Studio (see DeclaredPropertyGuard).
+    // Named explicitly so the rename-intent names get the targeted nudge above
+    // instead of falling through to unknown_property.
+    private static bool IsNodeAttributeName(string name)
+    {
+        switch (name)
+        {
+            case "DisplayName": case "BrowseName": case "Description":
+            case "NodeId": case "NodeClass":
+                return true;
+            default:
+                return false;
+        }
     }
 
     // ---- live-model write endpoints (inline mutation from the HTTP thread) ----
