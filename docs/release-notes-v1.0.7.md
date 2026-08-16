@@ -59,9 +59,9 @@ Notes:
 - `BrowseName` stays rename-only: it is the node's identity (paths,
   links, and bindings key on it), so it changes only through the
   re-authoring `rename`/`move` machinery.
-- `DisplayName` and the tree label are different things — Studio's
-  project tree may label nodes by BrowseName. If you want the visible
-  tree name changed, use `rename`.
+- Studio's project tree labels a node `BrowseName (DisplayName)` when
+  the two differ (verified live). To change the BrowseName part — the
+  identity paths and links key on — use `rename`.
 - `bind` / `attach_expression` on `DisplayName` are still refused — an
   attribute cannot carry a DynamicLink or converter.
 
